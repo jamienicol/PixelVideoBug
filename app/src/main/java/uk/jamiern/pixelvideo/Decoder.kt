@@ -7,39 +7,51 @@ import android.media.MediaFormat
 import android.util.Log
 import android.view.Surface
 
-private const val LOGTAG: String = "DecoderThread"
+private const val LOGTAG: String = "Decoder"
 
-class DecoderThread(asset: AssetFileDescriptor, outputSurface: Surface) : MediaCodec.Callback(),
-    Runnable {
-    private val mAsset = asset
-    private val mOutputSurface = outputSurface
-    private lateinit var mExtractor: MediaExtractor
-    private lateinit var mDecoder: MediaCodec
+class Decoder(source: AssetFileDescriptor) : MediaCodec.Callback() {
 
-    override fun run() {
-        Log.i(LOGTAG, "Running decoder thread")
+    private var mExtractor: MediaExtractor
+    private var mDecoder: MediaCodec
+    private var mFormat: MediaFormat
+    private var mMime: String
 
+    init {
         mExtractor = MediaExtractor()
-        mExtractor.setDataSource(mAsset)
+        mExtractor.setDataSource(source)
 
-        var format: MediaFormat? = null
-        var mime: String? = null
+        val track = findVideoTrack()
+        mExtractor.selectTrack(track)
+        mFormat = mExtractor.getTrackFormat(track)
+        mMime = mFormat.getString(MediaFormat.KEY_MIME)!!
+
+        Log.d(LOGTAG, "Format: $mFormat")
+        mDecoder = MediaCodec.createDecoderByType(mMime)
+        mDecoder.setCallback(this)
+    }
+
+    private fun findVideoTrack(): Int {
         for (i in 0..<mExtractor.trackCount) {
-            val currentFormat = mExtractor.getTrackFormat(i)
-            val currentMime = currentFormat.getString(MediaFormat.KEY_MIME)
-            if (currentMime!!.startsWith("video/", false)) {
-                format = currentFormat
-                mime = currentMime
-                mExtractor.selectTrack(i)
-                Log.d(LOGTAG, "Found track $i. mime: $mime")
-                break
+            val format = mExtractor.getTrackFormat(i)
+            Log.i(LOGTAG, "Track $i format: $format")
+            val mime = format.getString(MediaFormat.KEY_MIME)
+            if (mime != null && mime.startsWith("video/", false)) {
+                return i
             }
         }
+        throw RuntimeException("Could not find video track")
+    }
 
-        mDecoder = MediaCodec.createDecoderByType(mime!!)
-        mDecoder.setCallback(this)
-        mDecoder.configure(format!!, mOutputSurface, null, 0)
+    fun start(surface: Surface) {
+        Log.i(LOGTAG, "Decoder.start()")
+
+        mDecoder.configure(mFormat, surface, null, 0)
         mDecoder.start()
+    }
+
+    fun stop() {
+        Log.i(LOGTAG, "Decoder.stop()")
+        mDecoder.stop()
     }
 
     override fun onInputBufferAvailable(mc: MediaCodec, bufferId: Int) {
@@ -49,8 +61,10 @@ class DecoderThread(asset: AssetFileDescriptor, outputSurface: Surface) : MediaC
         val size = mExtractor.sampleSize
         val presentationTime = mExtractor.sampleTime
         val eos = !mExtractor.advance()
-        val flags = if (eos) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0
-        mc.queueInputBuffer(bufferId, 0, size.toInt(), presentationTime, flags)
+        if (eos) {
+            mExtractor.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+        }
+        mc.queueInputBuffer(bufferId, 0, size.toInt(), presentationTime, 0)
     }
 
     override fun onOutputBufferAvailable(
@@ -59,7 +73,7 @@ class DecoderThread(asset: AssetFileDescriptor, outputSurface: Surface) : MediaC
         bufferInfo: MediaCodec.BufferInfo
     ) {
         Log.i(LOGTAG, "onOutputBufferAvailable() id: $bufferId, info: $bufferInfo")
-        mc.releaseOutputBuffer(bufferId, true)
+        mc.releaseOutputBuffer(bufferId, bufferInfo.presentationTimeUs)
     }
 
     override fun onError(mc: MediaCodec, error: MediaCodec.CodecException) {
