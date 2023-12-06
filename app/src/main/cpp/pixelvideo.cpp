@@ -132,12 +132,14 @@ static const char VERTEX_SHADER[] =
 static const char FRAGMENT_SHADER[] =
         "#version 300 es\n"
         "#extension GL_OES_EGL_image_external_essl3 : require\n"
+        "#extension GL_EXT_YUV_target : require\n"
         "precision mediump float;\n"
-        "layout(location=" STRV(SAMPLER_UNIFORM) ") uniform samplerExternalOES sSampler;\n"
+        "layout(location=" STRV(SAMPLER_UNIFORM) ") uniform __samplerExternal2DY2YEXT sSampler;\n"
         "in vec2 vUv;\n"
         "out vec4 outColor;\n"
         "void main() {\n"
-        "    outColor = texture(sSampler, vUv);\n"
+        "    vec4 yuv = texture(sSampler, vUv);\n"
+        "    outColor = vec4(yuv_2_rgb(yuv.rgb, itu_601), yuv.a);"
         "}\n";
 
 struct Vertex {
